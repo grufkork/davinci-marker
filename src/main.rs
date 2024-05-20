@@ -103,6 +103,9 @@ impl MarkerApp {
 
 
     fn add_marker(&mut self){
+        if !self.running{
+            return;
+        }
         self.markers.push(
             Marker{
                 time: Instant::now() - self.start_instant,
