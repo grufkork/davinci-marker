@@ -1,7 +1,18 @@
-use std::{fs::File, io::Write, sync::mpsc::Receiver, thread, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
-use eframe::egui::{self, Vec2};
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use eframe::egui::{self, Color32, Layout, RichText, Vec2, Visuals};
 use egui_extras::{Column, TableBuilder};
-use global_hotkey::{hotkey::{Code, HotKey, Modifiers}, GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
+use global_hotkey::{
+    hotkey::{Code, HotKey, Modifiers},
+    GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
+};
+use std::{
+    fs::File,
+    io::Write,
+    sync::mpsc::Receiver,
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 
 fn main() {
     let manager = GlobalHotKeyManager::new().unwrap();
@@ -10,58 +21,55 @@ fn main() {
 
     let receiver = GlobalHotKeyEvent::receiver();
 
-    let (tx,rx) = std::sync::mpsc::channel::<bool>();
+    let (tx, rx) = std::sync::mpsc::channel::<bool>();
 
-    std::thread::spawn(move || loop{
-        if let Ok(event) = receiver.try_recv() {
-            if event.state == HotKeyState::Released{
+    std::thread::spawn(move || loop {
+        if let Ok(event) = receiver.recv() {
+            if event.state == HotKeyState::Released {
                 tx.send(true).unwrap();
             }
         }
-        thread::sleep(Duration::from_millis(100));
     });
 
     let native_options = eframe::NativeOptions::default();
-    eframe::run_native("Davinci Resolve Markermaker", native_options, Box::new(|cc| Box::new(MarkerApp::new(cc, rx)))).unwrap();
+    eframe::run_native(
+        "Davinci Resolve Markermaker",
+        native_options,
+        Box::new(|cc| Box::new(MarkerApp::new(cc, rx))),
+    )
+    .unwrap();
 }
-
 
 #[derive(Debug)]
-struct Marker{
+struct Marker {
     time: Duration,
-    name: String
+    name: String,
 }
 
-impl Marker{
-    fn to_edl(&self, index: usize) -> String{
+impl Marker {
+    fn to_edl(&self, index: usize) -> String {
         let timestamp = format!("{}:0", to_timecode(self.time));
 
         format!("{index:0>3} 001 V C {timestamp}0 {timestamp}1 {timestamp}0 {timestamp}1\n |C:ResolveColorBlue |M:{} |D:1\n", self.name)
     }
 }
 
-
-
-
-fn to_timecode(time: Duration) -> String{
+fn to_timecode(time: Duration) -> String {
     let t = time.as_millis();
 
-    let hour = t/(60*60*1000) + 1;
-    let minute = t%(60*60*1000) / (60*1000);
-    let second = t%(60*1000)/1000;
-
-
+    let hour = t / (60 * 60 * 1000) + 1;
+    let minute = t % (60 * 60 * 1000) / (60 * 1000);
+    let second = t % (60 * 1000) / 1000;
 
     format!("{hour:0>2}:{minute:0>2}:{second:0>2}")
 }
-
 
 struct MarkerApp {
     markers: Vec<Marker>,
     running: bool,
     start_instant: Instant,
     start_time: SystemTime,
-    rx: Receiver<bool>
+    rx: Receiver<bool>,
 }
 
 impl MarkerApp {
@@ -71,135 +79,148 @@ impl MarkerApp {
         // Use the cc.gl (a glow::Context) to create graphics shaders and buffers that you can use
         // for e.g. egui::PaintCallback.
 
+        cc.egui_ctx
+            .style_mut(|style| style.visuals = Visuals::dark());
+
         let ctx = cc.egui_ctx.clone();
 
-
-        thread::spawn(move ||{
-            loop{                
-                ctx.request_repaint();
-                thread::sleep(Duration::from_secs(1));
-            }
-
+        thread::spawn(move || loop {
+            ctx.request_repaint();
+            thread::sleep(Duration::from_secs(1));
         });
 
-
-
-        Self{
-            markers: vec![Marker{ time: Duration::from_secs(70), name: "Mark1".to_string() }],
+        Self {
+            markers: vec![Marker {
+                time: Duration::from_secs(70),
+                name: "Mark1".to_string(),
+            }],
             running: false,
             start_instant: Instant::now(),
             start_time: SystemTime::now(),
-            rx
+            rx,
         }
     }
 
-    fn write_markers(&self){
-        let mut file = File::create(format!("{}.edl", self.start_time.duration_since(UNIX_EPOCH).unwrap().as_secs())).unwrap();
+    fn write_markers(&self) {
+        let mut file = File::create(format!(
+            "{}.edl",
+            self.start_time
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+        ))
+        .unwrap();
 
-        for (i, marker) in self.markers.iter().enumerate(){
+        for (i, marker) in self.markers.iter().enumerate() {
             file.write_all(marker.to_edl(i + 1).as_bytes()).unwrap();
         }
     }
 
-
-    fn add_marker(&mut self){
-        if !self.running{
+    fn add_marker(&mut self) {
+        if !self.running {
             return;
         }
-        self.markers.push(
-            Marker{
-                time: Instant::now() - self.start_instant,
-                name: "Marker".to_string(),
-            }
-            );
+        self.markers.push(Marker {
+            time: Instant::now() - self.start_instant,
+            name: "Marker".to_string(),
+        });
         self.write_markers();
-
     }
 }
 
 impl eframe::App for MarkerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if let Ok(_) = self.rx.try_recv(){
+        if let Ok(_) = self.rx.try_recv() {
             self.add_marker();
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading(if self.running{
-                to_timecode(Instant::now() - self.start_instant)
-            }else{
-                "01:00:00".to_string()
-            });
+            ui.heading(
+                RichText::new(if self.running {
+                    to_timecode(Instant::now() - self.start_instant)
+                } else {
+                    "01:00:00".to_string()
+                })
+                .color(Color32::WHITE)
+                .size(50.)
+                .monospace(),
+            );
 
             ui.label("Shift+F9 to add marker. Edit names here later.");
             ui.label("Files are created in same folder as the .exe");
             ui.label("To import .edl file, right-click on the timeline in clip browser, go ");
             ui.label("Timelines -> Import -> Timeline Markers from EDL...");
 
-
-
-            if ui.button(if self.running {"Stop"} else {"Start"}).clicked(){
-                if self.running{
-                }else{
+            if ui
+                .button(if self.running { "Stop" } else { "Start" })
+                .clicked()
+            {
+                if self.running {
+                } else {
                     self.markers.clear();
                     self.start_instant = Instant::now();
                     self.start_time = SystemTime::now();
                 }
                 self.running = !self.running;
-
             }
 
             ui.add_space(30.);
 
-            if ui.add(egui::Button::new("Add Marker").min_size(Vec2::new(150., 50.))).clicked() && self.running{
+            if ui
+                .add(egui::Button::new("Add Marker").min_size(Vec2::new(150., 50.)))
+                .clicked()
+                && self.running
+            {
                 self.add_marker();
             }
 
             ui.add_space(30.);
 
-
             TableBuilder::new(ui)
                 .striped(true)
-
                 .column(Column::auto())
                 .column(Column::auto().at_least(60.))
                 .column(Column::auto().at_least(300.))
-                .header(20., |mut header|{
-                    header.col(|ui|{
-                        ui.heading("id");
+                .header(20., |mut header| {
+                    header.col(|ui| {
+                        ui.heading("ID");
                     });
-                    header.col(|ui|{
+                    header.col(|ui| {
                         ui.heading("Time");
                     });
-                    header.col(|ui|{
+                    header.col(|ui| {
                         ui.heading("Name");
                     });
                 })
-            .body(|mut body|{
-                let mut changed = false;
-                for (i, marker) in &mut self.markers.iter_mut().enumerate(){
-                    body.row(20.0, |mut row|{
-                        row.col(|ui|{
-                            ui.label(i.to_string());
+                .body(|mut body| {
+                    let mut changed = false;
+                    for (i, marker) in &mut self.markers.iter_mut().enumerate() {
+                        body.row(20.0, |mut row| {
+                            row.col(|ui| {
+                                ui.label(i.to_string());
+                            });
+                            row.col(|ui| {
+                                ui.label(
+                                    RichText::new(to_timecode(marker.time))
+                                        .color(Color32::from_gray(220))
+                                        .monospace(),
+                                );
+                            });
+                            row.col(|ui| {
+                                ui.with_layout(Layout::default(), |ui| {
+                                    ui.style_mut().visuals.override_text_color =
+                                        Some(Color32::from_gray(220));
+                                    let res = ui.text_edit_singleline(&mut marker.name);
+                                    changed |= res.changed();
+                                });
+                            });
                         });
-                        row.col(|ui|{
-                            ui.label(to_timecode(marker.time));
-                        });
-                        row.col(|ui|{
-                            let res = ui.text_edit_singleline(&mut marker.name);
+                    }
 
-                            changed |= res.changed();
-                        });
-                    });
-
-                }
-
-                if changed{
-                    self.write_markers();
-                }
-            });
-
+                    if changed {
+                        self.write_markers();
+                    }
+                });
         });
-
-
     }
 }
